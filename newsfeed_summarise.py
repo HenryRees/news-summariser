@@ -4,9 +4,11 @@ import requests
 import pytz
 import re
 import os
+import argparse
+from typing import Optional
 from dotenv import load_dotenv
 from datetime import date, timedelta, datetime
-from dateutil.parser import parse    
+from dateutil.parser import parse
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from glob import glob
@@ -19,7 +21,8 @@ from templates import MARKDOWN_END
 
 timezone = pytz.UTC
 load_dotenv()
-openai.api_key = os.environ["OPENAI_KEY"]
+openai.api_key = os.environ["OPENAI_API_KEY"]
+
 
 class NewsArticle:
     def __init__(self, title: str, url: str, content: str):
@@ -42,7 +45,7 @@ class NewsArticleWithSummary:
         return self.news_article.url
 
 
-def scrape_links(URL="https://www.bbc.co.uk/news/business"):
+def scrape_links(URL: str="https://www.bbc.co.uk/news/business"):
     URL = URL
     site = requests.get(URL)
 
@@ -60,7 +63,9 @@ def scrape_links(URL="https://www.bbc.co.uk/news/business"):
 
 
 def scrape_content(
-    article_URL="https://www.bbc.co.uk/news/business-67015663") -> NewsArticle | None:
+    num_days: int,
+    article_URL: str = "https://www.bbc.co.uk/news/business-67015663",
+) -> NewsArticle | None:
     URL = article_URL
     secondary_site = requests.get(URL)
 
@@ -68,10 +73,10 @@ def scrape_content(
     article_time = link_soup.find("time")
     if article_time is None:
         return None
-    article_datetime: datetime = parse(str(article_time.get("datetime"))) # type: ignore
+    article_datetime: datetime = parse(str(article_time.get("datetime")))  # type: ignore
     time_difference = datetime.now(timezone) - article_datetime
 
-    if time_difference > timedelta(days=3):
+    if time_difference > timedelta(days=num_days):
         return None
 
     article_heading = link_soup.find(id="main-heading")
@@ -97,21 +102,24 @@ def load_data():
             news_articles.append(NewsArticle(data["title"], "url", data["text"]))
     return news_articles
 
-def call_openai(text: str, model="gpt-4") -> str:
 
+def call_openai(text: str, model="gpt-4") -> str:
     response = openai.ChatCompletion.create(
         model=model,
-        messages=[{"role": "system", "content": "You are a helpful assistant."}, 
-                  {"role": "user", "content": text}] 
-        )
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": text},
+        ],
+    )
 
     output_message = response.choices[0]["message"]["content"]  # type: ignore
     return output_message
 
+
 def article_filter(article_titles: list[str], num_articles: int):
     bio = "I am a managment consultant with a keen interest in the US and UK financial markets and the transport sector."
     title_list = "/n".join([f"{i}: {title}" for i, title in enumerate(article_titles)])
-    
+
     message_text = f""" {bio}
 
 Choose {num_articles} which you think will be of interest to me"
@@ -124,21 +132,23 @@ Please respond with the numbers of the articles you would choose in the format [
     article_filter_response = call_openai(message_text)
 
     # Define a regex pattern to match square brackets
-    pattern = r'\[(.*?)\]'
+    pattern = r"\[(.*?)\]"
     match = re.search(pattern, article_filter_response)
 
     if match:
         filter_contents = match.group(1)
-        articles_to_filter = [int(num) for num in filter_contents.split(',')]
+        articles_to_filter = [int(num) for num in filter_contents.split(",")]
     else:
         return None
 
     return articles_to_filter
 
+
 def articles_summarise(
-    news_articles: list[NewsArticle]) -> list[NewsArticleWithSummary]:
+    news_articles: list[NewsArticle],
+) -> list[NewsArticleWithSummary]:
     news_articles_summarised = []
-    for news_article in tqdm(news_articles, desc = "Summarising articles"):
+    for news_article in tqdm(news_articles, desc="Summarising articles"):
         message_text = f"Please summarise the following news article in 4 sentences. /n {news_article.content} "
         news_article_summarised = NewsArticleWithSummary(
             news_article, call_openai(message_text)
@@ -164,30 +174,48 @@ def generate_markdown(news_articles_summarised: list[NewsArticleWithSummary]) ->
     return markdown_script
 
 
-def main():
+def main(num_articles: int, num_days: int):
     news_articles = []
     article_titles = []
-    for article_link in tqdm(scrape_links(), desc = "Scraping Links"):
-        news_article = scrape_content(article_link)
+    for article_link in tqdm(scrape_links(), desc="Scraping Links"):
+        news_article = scrape_content(num_days, article_link)
         if news_article is None:
             continue
         news_articles.append(news_article)
         article_titles.append(news_article.title)
 
-    articles_to_filter = article_filter(article_titles, num_articles=5)
+    if len(news_articles) <= num_articles:
+        articles_to_filter = None
+    else:
+        articles_to_filter = article_filter(article_titles, num_articles)
     if articles_to_filter is None:
         filtered_list = news_articles
     else:
-        filtered_list = [e for i, e  in enumerate(news_articles) if i in articles_to_filter]
-    
+        filtered_list = [
+            e for i, e in enumerate(news_articles) if i in articles_to_filter
+        ]
+
     news_articles_summarised = articles_summarise(filtered_list)
     markdown_script = generate_markdown(news_articles_summarised)
 
+    output_directory = "outputs"
     file_name = "Daily Business News " + str(date.today())
+    output_path = os.path.join(output_directory, file_name)
 
-    with open(file_name, "w") as file:
+    with open(output_directory, "w", encoding="utf-8") as file:
         file.write(markdown_script)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="News summariser")
+
+    parser.add_argument(
+        "--num_articles", type = int, default = 5, help="Number of articles to summarise"
+    )
+    parser.add_argument(
+        "--num_days", type = int, default = 1, help="How old do you want the articles to be"
+    )
+
+    args = parser.parse_args()
+
+    main(args.num_articles, args.num_days)
