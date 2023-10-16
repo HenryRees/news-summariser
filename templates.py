@@ -1,5 +1,10 @@
 MARKDOWN_HEADING = """# Daily Business News Summary
 
+These are the key takeaways from today's news:
+
+<ARTICLE_INTRO>
+
+
 Below are today's summarised **BBC Business news artics**
 
 ## Articles

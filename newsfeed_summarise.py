@@ -45,7 +45,7 @@ class NewsArticleWithSummary:
         return self.news_article.url
 
 
-def scrape_links(URL: str="https://www.bbc.co.uk/news/business"):
+def scrape_links(URL: str = "https://www.bbc.co.uk/news/business"):
     URL = URL
     site = requests.get(URL)
 
@@ -92,7 +92,7 @@ def scrape_content(
     return NewsArticle(article_heading.text, article_URL, article_content)
 
 
-def load_data():
+def load_data() -> list:
     # Opening JSON file
     paths = glob("News_articles/blogs_*.json")[:5]
     news_articles = []
@@ -116,8 +116,9 @@ def call_openai(text: str, model="gpt-4") -> str:
     return output_message
 
 
-def article_filter(article_titles: list[str], num_articles: int):
-    bio = "I am a managment consultant with a keen interest in the US and UK financial markets and the transport sector."
+def article_filter(
+    article_titles: list[str], num_articles: int, bio: str
+) -> list[int] | None:
     title_list = "/n".join([f"{i}: {title}" for i, title in enumerate(article_titles)])
 
     message_text = f""" {bio}
@@ -157,8 +158,28 @@ def articles_summarise(
     return news_articles_summarised
 
 
-def generate_markdown(news_articles_summarised: list[NewsArticleWithSummary]) -> str:
-    markdown_script = MARKDOWN_HEADING
+def generate_intro(
+    news_articles_summarised: list[NewsArticleWithSummary],
+) -> str | None:
+    summaries = [s.summary for s in news_articles_summarised]
+    summary_list = "/n".join([f"{i}: {summary}" for i, summary in enumerate(summaries)])
+
+    message_text = f"""Produce {len(news_articles_summarised)} bullet points, which are 1 sentence long, based on these news article summaries:
+
+{summary_list}
+
+Please respond with just the bullet points
+"""
+
+    article_intro = call_openai(message_text)
+
+    return article_intro
+
+
+def generate_markdown(
+    news_articles_summarised: list[NewsArticleWithSummary], article_intro
+) -> str:
+    markdown_script = MARKDOWN_HEADING.replace("<ARTICLE_INTRO>", article_intro)
 
     for news_article_summarised in news_articles_summarised:
         markdown_content = (
@@ -174,7 +195,7 @@ def generate_markdown(news_articles_summarised: list[NewsArticleWithSummary]) ->
     return markdown_script
 
 
-def main(num_articles: int, num_days: int):
+def main(num_articles: int, num_days: int, bio: str):
     news_articles = []
     article_titles = []
     for article_link in tqdm(scrape_links(), desc="Scraping Links"):
@@ -187,7 +208,7 @@ def main(num_articles: int, num_days: int):
     if len(news_articles) <= num_articles:
         articles_to_filter = None
     else:
-        articles_to_filter = article_filter(article_titles, num_articles)
+        articles_to_filter = article_filter(article_titles, num_articles, bio)
     if articles_to_filter is None:
         filtered_list = news_articles
     else:
@@ -196,13 +217,18 @@ def main(num_articles: int, num_days: int):
         ]
 
     news_articles_summarised = articles_summarise(filtered_list)
-    markdown_script = generate_markdown(news_articles_summarised)
+
+    article_intro = generate_intro(news_articles_summarised)
+    markdown_script = generate_markdown(news_articles_summarised, article_intro)
 
     output_directory = "outputs"
     file_name = "Daily Business News " + str(date.today())
     output_path = os.path.join(output_directory, file_name)
 
-    with open(output_directory, "w", encoding="utf-8") as file:
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    with open(output_path, "w", encoding="utf-8") as file:
         file.write(markdown_script)
 
 
@@ -210,12 +236,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="News summariser")
 
     parser.add_argument(
-        "--num_articles", type = int, default = 5, help="Number of articles to summarise"
+        "--num_articles", type=int, default=5, help="Number of articles to summarise"
     )
     parser.add_argument(
-        "--num_days", type = int, default = 1, help="How old do you want the articles to be"
+        "--num_days", type=int, default=1, help="How old do you want the articles to be"
+    )
+    parser.add_argument(
+        "--bio",
+        type=str,
+        default="I am a managment consultant with a keen interest in the US and UK financial markets and the transport sector.",
+        help="What are you interested in, this will help the AI filter the news articles for you",
     )
 
     args = parser.parse_args()
 
-    main(args.num_articles, args.num_days)
+    main(args.num_articles, args.num_days, args.bio)
