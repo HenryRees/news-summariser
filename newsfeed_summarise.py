@@ -5,7 +5,8 @@ import pytz
 import re
 import os
 import argparse
-from typing import Optional
+import smtplib
+import markdown
 from dotenv import load_dotenv
 from datetime import date, timedelta, datetime
 from dateutil.parser import parse
@@ -16,12 +17,17 @@ from datetime import date
 from templates import MARKDOWN_HEADING
 from templates import MARKDOWN_CONTENT
 from templates import MARKDOWN_END
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 
 # Global variables
 
 timezone = pytz.UTC
 load_dotenv()
 openai.api_key = os.environ["OPENAI_API_KEY"]
+sender_email = os.environ["SENDER_EMAIL"]
+sender_password = os.environ["SENDER_PASSWORD"]
 
 
 class NewsArticle:
@@ -86,7 +92,7 @@ def scrape_content(
     link_contents = link_soup.select("main")[0].find_all("p")
     content = []
     for link_content in link_contents:
-        if "PromoHeadline" not in link_content.attrs["class"][0]:
+        if "class" not in link_content.attrs or "PromoHeadline" not in link_content.attrs["class"][0]:
             content.append(link_content.text)
     article_content = " ".join(content)
     return NewsArticle(article_heading.text, article_URL, article_content)
@@ -136,11 +142,16 @@ Please respond with the numbers of the articles you would choose in the format [
     pattern = r"\[(.*?)\]"
     match = re.search(pattern, article_filter_response)
 
+    articles_to_filter = []
+    
     if match:
         filter_contents = match.group(1)
         articles_to_filter = [int(num) for num in filter_contents.split(",")]
+    if len(articles_to_filter) > num_articles:
+        articles_to_filter = articles_to_filter[:num_articles]
     else:
         return None
+    
 
     return articles_to_filter
 
@@ -194,10 +205,34 @@ def generate_markdown(
 
     return markdown_script
 
+def send_email(recipient_email, message_script):
+    
+    subject = "Daily Newsletter"
 
-def main(num_articles: int, num_days: int, bio: str):
+    smtp_server = "smtp.gmail.com"  # Use the SMTP server of your email provider
+    smtp_port = 587  # Port for Gmail is 587
+    smtp_username = sender_email
+    smtp_password = sender_password
+
+    message = MIMEMultipart()
+    message["From"] = sender_email
+    message["To"] = recipient_email
+    message["Subject"] = subject
+    html_text = markdown.markdown(message_script)
+    message.attach(MIMEText(html_text, "html"))
+
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    server.starttls()
+    server.login(smtp_username, smtp_password)
+
+    server.sendmail(sender_email, recipient_email, message.as_string())
+
+    server.quit()
+
+def main(email_address: str, num_articles: int, num_days: int, bio: str):
     news_articles = []
     article_titles = []
+    
     for article_link in tqdm(scrape_links(), desc="Scraping Links"):
         news_article = scrape_content(num_days, article_link)
         if news_article is None:
@@ -230,11 +265,17 @@ def main(num_articles: int, num_days: int, bio: str):
 
     with open(output_path, "w", encoding="utf-8") as file:
         file.write(markdown_script)
-
+    
+    send_email(email_address, markdown_script)
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="News summariser")
 
+    parser.add_argument(
+        "email_address", type=str, help="Please enter your email"
+    )
+    
     parser.add_argument(
         "--num_articles", type=int, default=5, help="Number of articles to summarise"
     )
@@ -250,4 +291,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    main(args.num_articles, args.num_days, args.bio)
+    main(args.email_address, args.num_articles, args.num_days, args.bio)
