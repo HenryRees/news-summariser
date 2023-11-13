@@ -61,8 +61,8 @@ def scrape_links(URL: str = "https://www.bbc.co.uk/news/business"):
     article_links = []
     for web_link in web_links:
         if (
-            len(web_link) == 23 and web_link[:15] == "/news/business-"
-        ):  # Is there a better way to filter links
+            len(web_link) == 23 and "/news/business-" in web_link
+        ):  # Filters only links that are valid articles
             article_links.append("https://www.bbc.co.uk" + web_link)
     article_links = list(set(article_links))  # deduplicate list
     return article_links
